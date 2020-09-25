@@ -1,0 +1,113 @@
+---
+title: "Phyloseq"
+author: "Yingzhu Chen"
+date: "9/1/2020"
+output: html_document
+---
+
+# Without Phylogenetic Tree (for code testing purposes)
+
+```{r}
+library(Biostrings)
+library(data.table)
+library(phyloseq)
+library(DESeq2)
+library(ggplot2)
+library(vegan)
+library(dplyr)
+```
+
+
+# https://benjjneb.github.io/dada2/tutorial.html
+```{r}
+## Phyloseq
+theme_set(theme_bw())
+
+# construct a simple sample data.frame
+samples.out <- rownames(seqtab.nochim)
+subject <- sapply(strsplit(samples.out, "_"), `[`, 1)
+oil <- substr(subject,21,21)
+plant <- substr(subject,19,19)
+location <- substr(sapply(strsplit(samples.out, "_"), `[`, 1),20,20)
+samdf <- data.frame(Plant=plant, Oil=oil, Location=location)
+rownames(samdf) <- samples.out
+
+# construct a phyloseq object directly from the dada2 outputs
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa))
+```
+
+```{r}
+rank_names(ps)
+```
+
+
+# Filter Taxa
+# Taxa without mitochondria and chloroplast
+```{r}
+bad.order<-c("Chloroplast")
+bad.family<-c("Mitochondria")
+
+ps0 = subset_taxa(ps, !Order %in% bad.order & !Family %in% bad.family)
+
+ps0
+```
+
+
+# Create a table of read counts for each Phylum present in the dataset.
+# https://www.bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/doc/MicrobiomeWorkshopII.html
+```{r}
+table(tax_table(ps0)[, "Phylum"], exclude = NULL)
+```
+
+# Create a table of read counts for each Geuns present in the dataset.
+```{r}
+table(tax_table(ps0)[, "Genus"], exclude = NULL)
+```
+
+# Prevalence of each taxa
+# https://www.bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/doc/MicrobiomeWorkshopII.html
+```{r}
+prevdf = apply(X = otu_table(ps0),
+               MARGIN = ifelse(taxa_are_rows(ps0), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to the data.frame
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps0),
+                    tax_table(ps0))
+```
+
+# Total and average prevalences of the features in each Phylum
+# https://www.bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/doc/MicrobiomeWorkshopII.html
+```{r}
+plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
+```
+# Filter phylum with lowest feaures
+```{r}
+# Define phyla to filter
+filterPhyla = c("", "")
+# Filter entries
+ps1 = subset_taxa(ps0, !Phylum %in% filterPhyla)
+ps1
+```
+
+
+# Relative abundance
+```{r}
+ps0_rel <- t(apply(otu_table(ps0), 1, function(x) x / sum(x)))
+ps0_rel
+```
+
+
+# https://benjjneb.github.io/dada2/tutorial.html
+```{r}
+# Use short names for ASVs 
+dna <- Biostrings::DNAStringSet(taxa_names(ps0))
+names(dna) <- taxa_names(ps0)
+ps0 <- merge_phyloseq(ps0, dna)
+taxa_names(ps0) <- paste0("ASV", seq(ntaxa(ps0)))
+ps0
+```
+
+

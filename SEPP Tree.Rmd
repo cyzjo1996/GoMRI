@@ -1,0 +1,95 @@
+---
+title: "SEPP Tree"
+author: "Yingzhu Chen"
+date: "9/20/2020"
+output: html_document
+---
+
+# Taken from Alex McCumber's rmd
+```{r, make list of sequences in fasta file for tree making}
+library(dada2)
+require(phangorn)
+require(DECIPHER)
+uniques=getUniques(seqtab.nochim)
+sequences=names(uniques)
+uniquesToFasta(uniques,fout = "~/GoMRI/asv.fasta", ids=sequences)
+```
+
+
+# https://github.com/smirarab/sepp/tree/master/sepp-package
+```{bash, make a tree with SEPP using gg backbone tree}
+wget  "https://raw.github.com/smirarab/sepp-refs/master/gg/sepp-package.tar.bz"
+tar xvfj sepp-package.tar.bz
+cd sepp-package/sepp
+python setup.py config -c
+~/GoMRI/sepp-package/run-sepp.sh ~/GoMRI/asv.fasta asv_sepp
+```
+
+
+# The following chuncks have not been modified yet - Waiting for SEPP
+```{r, view tree file with ggtree}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("ggtree")
+library(ape)
+SEPP.tree = read.tree(file = "~/GoMRI/asv_sepp_placement.tog.relabelled.tre") %>%
+  keep.tip(., sequences)
+```
+
+# Drop tips from backbone tree
+```{r}
+SEPP.tree_pruned <- drop.tip(SEPP.tree,SEPP.tree$tip.label[(!SEPP.tree$tip.label %in% names(ASV_seqs))])
+```
+
+
+# Examine tree
+```{r}
+tree_sepp <- ggtree::ggtree(SEPP.tree_pruned,layout='circular',branch.length='none')+labs(title='SEPP tree')
+tree_sepp
+```
+
+------------------------------------------------------------------------------------------------------------
+
+# Make phyloseq objects with Tree 
+```{r}
+seqtab.ASVs <- seqtab
+colnames(seqtab.ASVs) <-names(ASV.seqs)
+
+taxid.silva.ASV <- taxid.silva
+rownames(taxid.silva.ASV) <- names(ASV.seqs)
+
+ps.sepp.silva <- phyloseq(otu_table(seqtab.ASVs,taxa_are_rows=FALSE),phy_tree(SEPP.tree_pruned),tax_table(taxid.silva.ASV),sample_data(metadata))
+
+```
+
+```{r}
+## Phyloseq
+theme_set(theme_bw())
+
+# construct a simple sample data.frame
+samples.out <- rownames(seqtab.nochim)
+subject <- sapply(strsplit(samples.out, "_"), `[`, 1)
+oil <- substr(subject,21,21)
+plant <- substr(subject,19,19)
+location <- substr(sapply(strsplit(samples.out, "_"), `[`, 1),20,20)
+samdf <- data.frame(Plant=plant, Oil=oil, Location=location)
+rownames(samdf) <- samples.out
+
+# construct a phyloseq object directly from the dada2 outputs
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               phy_tree(SEPP.tree_pruned),
+               sample_data(samdf), 
+               tax_table(taxa))
+#ps <- prune_samples(sample_names(ps) != "Mock", ps) # Remove mock sample
+```
+
+
+#  save the phyloseq object as an RDS file
+```{r}
+saveRDS(ps.sepp.silva,file.path(~/GoMRI/,'ps_sepp_silva.RDS'))
+```
+
+# Read in RDS 
+```{r}
+ps.sepp.silva <- readRDS(file.path(~/GoMRI/,'ps_sepp_silva.RDS'))
+```

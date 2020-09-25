@@ -1,0 +1,159 @@
+---
+title: "GoMRI-Dada2"
+author: "Yingzhu Chen"
+date: "8/16/2020"
+output: html_document
+---
+
+# Cutadapt: Remove adapter (Nextera)
+```{bash} 
+# Done on local Rstudio
+for i in /Users/yzchen/Desktop/GoMRI/*_R1_001.fastq.gz
+do
+SAMPLE=$(echo ${i} | sed "s/_R1_\001\.fastq\.gz//")
+echo ${SAMPLE}_R1_001.fastq.gz ${SAMPLE}_R2_001.fastq.gz
+cutadapt -a "CTGTCTCTTATA" -A "CTGTCTCTTATA"  -o ${SAMPLE}_trimmed_R1_001.fastq.gz -p ${SAMPLE}_trimmed_R2_001.fastq.gz ${SAMPLE}_R1_001.fastq.gz ${SAMPLE}_R2_001.fastq.gz 
+done
+```
+
+
+# DADA2 pipeline done on IBIEM 2019 Container
+# Codes taken from https://benjjneb.github.io/dada2/tutorial.html
+```{r}
+## Load Packages
+library(dada2)
+library(Biostrings)
+library(ShortRead)
+
+packageVersion("dada2")
+packageVersion("Biostrings")
+packageVersion("ShortRead")
+```
+
+
+```{r}
+## Set Path
+path <- "~/GoMRI" 
+list.files(path)
+```
+
+
+```{r}
+## Match lists of the forward and reverse fastq files
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE))
+
+# Extract sample names
+ #Original command:sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+
+sample.fields <- lapply(strsplit(fnFs, "_"), `[`, c(1,2)) # Trouble shooting Part 3: "All output files must be distinct"
+sample.names <- sapply(sample.fields, function(fields) paste0(fields[1], fields[2])) 
+```
+
+
+```{r}
+## Inspect read quality profiles
+plotQualityProfile(fnFs[1:2])
+plotQualityProfile(fnRs[1:2])
+```
+
+
+```{r}
+## Filter and Trim
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+```
+
+```{r}
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(250,230), trimLeft=c(19,17),
+              maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=TRUE,
+              compress=TRUE, multithread=TRUE)
+head(out)
+```
+
+```{r}
+## Error Rates
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+plotErrors(errF, nominalQ=TRUE)
+```
+
+```{r}
+## Dereplication
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+# Name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+```
+
+```{r}
+## Sample Inference
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+dadaFs[[1]]
+```
+
+
+```{r}
+## Merge Paired Reads
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+```
+
+
+```{r}
+## Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+```
+
+
+```{r}
+## Remove Chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+
+# check
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+
+```{r}
+## Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+knitr::kable(track)
+```
+
+# Save sequence table.
+```{r}
+saveRDS(seqtab.nochim, "seqtab.nochim.rds")
+```
+
+
+```{r}
+## Assign taxonomy
+taxa <- assignTaxonomy(seqtab.nochim, "~/GoMRI/silva_nr_v132_train_set.fa", multithread=FALSE)
+
+## Assign species
+# taxa <- addSpecies(taxa, "~/GoMRI/silva_species_assignment_v132.fa")
+
+#Inspect
+taxa.print <- taxa 
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+
